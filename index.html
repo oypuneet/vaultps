@@ -88,7 +88,7 @@ function validateMasterPassword(pw){
   return regex.test(pw);
 }
 function validateItemPassword(pw){
-  return validateMasterPassword(pw); // same rules for password items
+  return validateMasterPassword(pw);
 }
 
 // ---------------------- App Logic ----------------------
@@ -98,12 +98,12 @@ const app=document.getElementById('vault-interface');
 
 // Initialize App
 if(!loadSalt()){
-  renderSetPassword();  // first-time setup
+  renderSetPassword();
 }else{
-  renderUnlock();       // existing vault
+  renderUnlock();
 }
 
-// ---------------------- Set Master Password (First-time) ----------------------
+// ---------------------- Set Master Password ----------------------
 function renderSetPassword(){
   app.innerHTML=`
     <p class="mb-2">Set your master password</p>
@@ -111,7 +111,6 @@ function renderSetPassword(){
     <div id='error' class='text-red-500 mt-2'></div>
     <button id="setBtn" class="bg-indigo-600 text-white p-2 rounded w-full mt-2">Set Password</button>
   `;
-
   const pwInput=document.getElementById('mp');
   document.getElementById('setBtn').onclick=async ()=>{
     const pw = pwInput.value;
@@ -124,10 +123,8 @@ function renderSetPassword(){
     masterKey = await deriveKey(pw,salt);
     vault={items:[]};
     await saveVault(vault, masterKey);
-
     const hint = prompt('Optional: Enter a password hint (visible only to you)')||'';
     localStorage.setItem('vault_hint', hint);
-
     alert('Master password set! Now you can unlock your vault.');
     renderUnlock();
   };
@@ -141,15 +138,11 @@ function renderUnlock(){
     <div id='error' class='text-red-500 mt-2'></div>
     <button id="loginBtn" class="bg-indigo-600 text-white p-2 rounded w-full mt-2">Unlock Vault</button>
   `;
-
   const pwInput=document.getElementById('mp');
-
-  // Show hint on hover/click
   pwInput.onmouseenter = pwInput.onclick = () => {
     const hint = localStorage.getItem('vault_hint');
     if(hint) alert(`Hint: ${hint}`);
   };
-
   async function unlockVault(){
     const pw = pwInput.value;
     const salt = loadSalt();
@@ -161,7 +154,6 @@ function renderUnlock(){
       document.getElementById('error').innerText='Incorrect password or corrupted vault';
     }
   }
-
   document.getElementById('loginBtn').onclick=unlockVault;
   pwInput.onkeypress = async (e)=>{
     if(e.key==='Enter') await unlockVault();
@@ -188,7 +180,7 @@ function renderVault(){
   renderItems();
 }
 
-// Render vault items
+// ---------------------- Vault Items ----------------------
 function renderItems(){
   const container=document.getElementById('items');
   container.innerHTML='';
@@ -206,4 +198,50 @@ function renderItems(){
       } else alert(item.content);
     };
     div.querySelector('button:nth-child(2)').onclick=()=>{
-      if(confirm('Delete this item?'))
+      if(confirm('Delete this item?')){vault.items=vault.items.filter(i=>i.id!==item.id);saveVault(vault,masterKey);renderItems();}
+    };
+    container.appendChild(div);
+  });
+}
+
+// ---------------------- Add Vault Item ----------------------
+function addItem(type){
+  const title=prompt('Title:');
+  if(!title)return;
+  let content='',date=null;
+  if(type==='password'){
+    const user=prompt('Username (optional)')||'';
+    let pwd=prompt('Password (or cancel to generate)')||generateStrongPassword();
+    if(!validateItemPassword(pwd)){alert('Password must include uppercase, lowercase, number, symbol, min 8 chars'); return;}
+    content=JSON.stringify({username:user,password:pwd});
+  } else if(type==='reminder'){
+    content=prompt('Reminder content')||'';
+    date=prompt('Due date YYYY-MM-DD HH:mm (optional)')||null;
+  } else {
+    content=prompt('Note content')||'';
+  }
+  vault.items.unshift({id:uid(),type,title,content,date});
+  saveVault(vault,masterKey);
+  renderItems();
+}
+
+// ---------------------- Generate Password ----------------------
+function generateStrongPassword(len=12){
+  const chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+';
+  let pw='';
+  for(let i=0;i<len;i++) pw+=chars[Math.floor(Math.random()*chars.length)];
+  return pw;
+}
+
+// ---------------------- Export Vault ----------------------
+function exportVault(){
+  const enc=JSON.parse(localStorage.getItem(DATA_KEY)||'null');
+  if(!enc)return alert('No vault to export');
+  const payload={salt:localStorage.getItem(SALT_KEY),data:enc};
+  const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='vault-backup.json';a.click();URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
