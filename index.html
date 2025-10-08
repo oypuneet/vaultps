@@ -1,14 +1,14 @@
-<!DOCTYPE html>
+<!DOCTYPE html><!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Secure Vault PWA</title>
 
-<!-- Tailwind CSS CDN for development (ignore production warning) -->
+<!-- Tailwind CSS CDN for development -->
 <script src="https://cdn.tailwindcss.com"></script>
 
-<!-- Firebase SDKs (compat versions for simple PWA setup) -->
+<!-- Firebase SDKs (compat) -->
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 
@@ -23,15 +23,13 @@
 <script>
 // ---------------------- Firebase Setup ----------------------
 const firebaseConfig = {
-  apiKey: "AIzaSyC3fh3Z4YTC8PgXAdkJRWzk111_KzhB8Rs",
-  authDomain: "vaultapp-d5685.firebaseapp.com",
-  projectId: "vaultapp-d5685",
-  storageBucket: "vaultapp-d5685.firebasestorage.app",
-  messagingSenderId: "959170111149",
-  appId: "1:959170111149:web:479c020f1da0824f1f0824"
+  apiKey: "YOUR_API_KEY",
+  authDomain: "your-project.firebaseapp.com",
+  projectId: "your-project",
+  storageBucket: "your-project.appspot.com",
+  messagingSenderId: "SENDER_ID",
+  appId: "APP_ID"
 };
-
-// Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
@@ -41,8 +39,7 @@ function base64ToBuf(b64){return Uint8Array.from(atob(b64), c=>c.charCodeAt(0))}
 async function deriveKey(password, salt){
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-  const key = await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:200000,hash:'SHA-256'},keyMaterial,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
-  return key;
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:200000,hash:'SHA-256'}, keyMaterial,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
 async function encryptData(key,obj){
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -68,29 +65,30 @@ function uid(){return Math.random().toString(36).slice(2,10);}
 async function saveVault(obj, key) {
   const enc = await encryptData(key, obj);
   localStorage.setItem(DATA_KEY, JSON.stringify(enc));
-
-  // Sync to Firebase (encrypted)
-  try {
-    await db.collection('vaults').doc('myVault').set(enc);
-    console.log('Vault synced to Firebase');
-  } catch(e) { console.error('Firebase sync error:', e); }
+  try { await db.collection('vaults').doc('myVault').set(enc); console.log('Vault synced to Firebase'); }
+  catch(e){console.error('Firebase sync error:',e);}
 }
 
-// Load vault: try localStorage first, fallback to Firebase
+// Load vault: localStorage first, fallback Firebase
 async function loadVault(key){
   const localEnc = JSON.parse(localStorage.getItem(DATA_KEY)||'null');
-  if(localEnc){
-    return await decryptData(key, localEnc.iv, localEnc.ct);
-  } else {
-    const doc = await db.collection('vaults').doc('myVault').get();
-    if(doc.exists){
-      const enc = doc.data();
-      localStorage.setItem(DATA_KEY, JSON.stringify(enc));
-      return await decryptData(key, enc.iv, enc.ct);
-    } else {
-      return {items:[]};
-    }
-  }
+  if(localEnc) return await decryptData(key, localEnc.iv, localEnc.ct);
+  const doc = await db.collection('vaults').doc('myVault').get();
+  if(doc.exists){
+    const enc = doc.data();
+    localStorage.setItem(DATA_KEY, JSON.stringify(enc));
+    return await decryptData(key, enc.iv, enc.ct);
+  } 
+  return {items:[]};
+}
+
+// ---------------------- Password Validation ----------------------
+function validateMasterPassword(pw){
+  const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+]).{8,}$/;
+  return regex.test(pw);
+}
+function validateItemPassword(pw){
+  return validateMasterPassword(pw); // same rules for password items
 }
 
 // ---------------------- App Logic ----------------------
@@ -100,26 +98,42 @@ const app=document.getElementById('vault-interface');
 
 // Render login / master password
 function renderLogin(){
-  app.innerHTML=`<input type='password' id='mp' placeholder='Master Password' class='p-3 rounded w-full mb-2 border'/>
-  <button id='loginBtn' class='bg-indigo-600 text-white p-2 rounded w-full'>Unlock Vault</button>
-  <div id='error' class='text-red-500 mt-2'></div>`;
+  app.innerHTML=`
+    <input type='password' id='mp' placeholder='Master Password' class='p-3 rounded w-full mb-2 border'/>
+    <button id='showHintBtn' class='bg-gray-400 text-white p-2 rounded w-full mb-2'>Show Hint</button>
+    <button id='loginBtn' class='bg-indigo-600 text-white p-2 rounded w-full'>Unlock Vault</button>
+    <div id='error' class='text-red-500 mt-2'></div>`;
   
-  document.getElementById('loginBtn').onclick=async()=>{
+  document.getElementById('showHintBtn').onclick = () => {
+    const hint = localStorage.getItem('vault_hint');
+    if(hint) alert(`Password hint: ${hint}`);
+    else alert('No hint set');
+  };
+
+  document.getElementById('loginBtn').onclick = async () => {
     const pw=document.getElementById('mp').value;
     const salt=loadSalt();
-    if(!salt){
-      const newSalt=crypto.getRandomValues(new Uint8Array(16));
-      saveSalt(newSalt);
-      masterKey=await deriveKey(pw,newSalt);
+
+    if(!salt){ // first-time setup
+      if(!validateMasterPassword(pw)){
+        document.getElementById('error').innerText='Password must include uppercase, lowercase, number, symbol, min 8 chars';
+        return;
+      }
+      masterKey = await deriveKey(pw, crypto.getRandomValues(new Uint8Array(16)));
+      saveSalt(crypto.getRandomValues(new Uint8Array(16)));
       vault={items:[]};
-      await saveVault(vault,masterKey);
+      await saveVault(vault, masterKey);
+
+      const hint = prompt('Optional: Enter a password hint (visible only to you)')||'';
+      localStorage.setItem('vault_hint', hint);
+
       renderVault();
-    } else {
+    } else { // existing vault
       try {
         masterKey = await deriveKey(pw,salt);
         vault = await loadVault(masterKey);
         renderVault();
-      } catch(e) {
+      } catch(e){
         document.getElementById('error').innerText='Incorrect password or corrupted vault';
       }
     }
@@ -128,12 +142,13 @@ function renderLogin(){
 
 // Render main vault interface
 function renderVault(){
-  app.innerHTML=`<div class='flex flex-col gap-2 mb-2'>
-    <button id='addNote' class='bg-green-600 text-white p-2 rounded'>+ Note</button>
-    <button id='addPassword' class='bg-blue-600 text-white p-2 rounded'>+ Password</button>
-    <button id='addReminder' class='bg-yellow-600 text-white p-2 rounded'>+ Reminder</button>
-    <button id='exportVault' class='bg-gray-600 text-white p-2 rounded'>Export Vault</button>
-    <button id='lockVault' class='bg-red-600 text-white p-2 rounded'>Lock Vault</button>
+  app.innerHTML=`
+    <div class='flex flex-col gap-2 mb-2'>
+      <button id='addNote' class='bg-green-600 text-white p-2 rounded'>+ Note</button>
+      <button id='addPassword' class='bg-blue-600 text-white p-2 rounded'>+ Password</button>
+      <button id='addReminder' class='bg-yellow-600 text-white p-2 rounded'>+ Reminder</button>
+      <button id='exportVault' class='bg-gray-600 text-white p-2 rounded'>Export Vault</button>
+      <button id='lockVault' class='bg-red-600 text-white p-2 rounded'>Lock Vault</button>
     </div>
     <div id='items'></div>`;
 
@@ -176,7 +191,8 @@ function addItem(type){
   let content='',date=null;
   if(type==='password'){
     const user=prompt('Username (optional)')||'';
-    const pwd=prompt('Password (or cancel to generate)')||Math.random().toString(36).slice(2,10);
+    let pwd=prompt('Password (or cancel to generate)')||generateStrongPassword();
+    if(!validateItemPassword(pwd)){alert('Password must include uppercase, lowercase, number, symbol, min 8 chars'); return;}
     content=JSON.stringify({username:user,password:pwd});
   } else if(type==='reminder'){
     content=prompt('Reminder content')||'';
@@ -187,6 +203,14 @@ function addItem(type){
   vault.items.unshift({id:uid(),type,title,content,date});
   saveVault(vault,masterKey);
   renderItems();
+}
+
+// Generate strong password
+function generateStrongPassword(len=12){
+  const chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+';
+  let pw='';
+  for(let i=0;i<len;i++) pw+=chars[Math.floor(Math.random()*chars.length)];
+  return pw;
 }
 
 // Export encrypted vault
@@ -204,3 +228,5 @@ renderLogin();
 </script>
 </body>
 </html>
+
+
