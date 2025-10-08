@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Secure Vault PWA</title>
+
+<!-- Tailwind CSS CDN for development (ignore production warning) -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<!-- Firebase SDKs (compat versions for simple PWA setup) -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+
+<div class="p-4 max-w-3xl mx-auto" id="app">
+  <h1 class="text-2xl font-bold mb-4">Secure Vault</h1>
+  <div id="vault-interface"></div>
+</div>
+
+<script>
+// ---------------------- Firebase Setup ----------------------
+const firebaseConfig = {
+  apiKey: "AIzaSyC3fh3Z4YTC8PgXAdkJRWzk111_KzhB8Rs",
+  authDomain: "vaultapp-d5685.firebaseapp.com",
+  projectId: "vaultapp-d5685",
+  storageBucket: "vaultapp-d5685.firebasestorage.app",
+  messagingSenderId: "959170111149",
+  appId: "1:959170111149:web:479c020f1da0824f1f0824"
+};
+
+// Initialize Firebase
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ---------------------- Crypto Helpers ----------------------
+function bufToBase64(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)))}
+function base64ToBuf(b64){return Uint8Array.from(atob(b64), c=>c.charCodeAt(0))}
+async function deriveKey(password, salt){
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:200000,hash:'SHA-256'},keyMaterial,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  return key;
+}
+async function encryptData(key,obj){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const ct = await crypto.subtle.encrypt({name:'AES-GCM',iv}, key, enc.encode(JSON.stringify(obj)));
+  return {iv:bufToBase64(iv),ct:bufToBase64(ct)};
+}
+async function decryptData(key,ivB64,ctB64){
+  const iv = base64ToBuf(ivB64);
+  const ct = base64ToBuf(ctB64);
+  const plain = await crypto.subtle.decrypt({name:'AES-GCM',iv}, key, ct);
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+// ---------------------- Storage Helpers ----------------------
+const SALT_KEY='vault_salt';
+const DATA_KEY='vault_data';
+function saveSalt(salt){localStorage.setItem(SALT_KEY,bufToBase64(salt));}
+function loadSalt(){const s=localStorage.getItem(SALT_KEY);return s?base64ToBuf(s):null;}
+function uid(){return Math.random().toString(36).slice(2,10);}
+
+// Save vault: localStorage + Firebase encrypted
+async function saveVault(obj, key) {
+  const enc = await encryptData(key, obj);
+  localStorage.setItem(DATA_KEY, JSON.stringify(enc));
+
+  // Sync to Firebase (encrypted)
+  try {
+    await db.collection('vaults').doc('myVault').set(enc);
+    console.log('Vault synced to Firebase');
+  } catch(e) { console.error('Firebase sync error:', e); }
+}
+
+// Load vault: try localStorage first, fallback to Firebase
+async function loadVault(key){
+  const localEnc = JSON.parse(localStorage.getItem(DATA_KEY)||'null');
+  if(localEnc){
+    return await decryptData(key, localEnc.iv, localEnc.ct);
+  } else {
+    const doc = await db.collection('vaults').doc('myVault').get();
+    if(doc.exists){
+      const enc = doc.data();
+      localStorage.setItem(DATA_KEY, JSON.stringify(enc));
+      return await decryptData(key, enc.iv, enc.ct);
+    } else {
+      return {items:[]};
+    }
+  }
+}
+
+// ---------------------- App Logic ----------------------
+let masterKey=null;
+let vault={items:[]};
+const app=document.getElementById('vault-interface');
+
+// Render login / master password
+function renderLogin(){
+  app.innerHTML=`<input type='password' id='mp' placeholder='Master Password' class='p-3 rounded w-full mb-2 border'/>
+  <button id='loginBtn' class='bg-indigo-600 text-white p-2 rounded w-full'>Unlock Vault</button>
+  <div id='error' class='text-red-500 mt-2'></div>`;
+  
+  document.getElementById('loginBtn').onclick=async()=>{
+    const pw=document.getElementById('mp').value;
+    const salt=loadSalt();
+    if(!salt){
+      const newSalt=crypto.getRandomValues(new Uint8Array(16));
+      saveSalt(newSalt);
+      masterKey=await deriveKey(pw,newSalt);
+      vault={items:[]};
+      await saveVault(vault,masterKey);
+      renderVault();
+    } else {
+      try {
+        masterKey = await deriveKey(pw,salt);
+        vault = await loadVault(masterKey);
+        renderVault();
+      } catch(e) {
+        document.getElementById('error').innerText='Incorrect password or corrupted vault';
+      }
+    }
+  };
+}
+
+// Render main vault interface
+function renderVault(){
+  app.innerHTML=`<div class='flex flex-col gap-2 mb-2'>
+    <button id='addNote' class='bg-green-600 text-white p-2 rounded'>+ Note</button>
+    <button id='addPassword' class='bg-blue-600 text-white p-2 rounded'>+ Password</button>
+    <button id='addReminder' class='bg-yellow-600 text-white p-2 rounded'>+ Reminder</button>
+    <button id='exportVault' class='bg-gray-600 text-white p-2 rounded'>Export Vault</button>
+    <button id='lockVault' class='bg-red-600 text-white p-2 rounded'>Lock Vault</button>
+    </div>
+    <div id='items'></div>`;
+
+  document.getElementById('addNote').onclick=()=>addItem('note');
+  document.getElementById('addPassword').onclick=()=>addItem('password');
+  document.getElementById('addReminder').onclick=()=>addItem('reminder');
+  document.getElementById('exportVault').onclick=exportVault;
+  document.getElementById('lockVault').onclick=()=>{masterKey=null;vault={items:[]};renderLogin();};
+  renderItems();
+}
+
+// Render vault items
+function renderItems(){
+  const container=document.getElementById('items');
+  container.innerHTML='';
+  vault.items.forEach(item=>{
+    const div=document.createElement('div');
+    div.className='p-2 bg-white dark:bg-gray-800 rounded mb-2 flex justify-between items-center';
+    let content=item.type==='password'?'••••••••':item.content;
+    div.innerHTML=`<div><b>${item.title}</b> (${item.type}) ${item.date?'- '+item.date:''}<br>${content}</div>
+      <div class='flex gap-2'><button class='bg-blue-600 text-white p-1 rounded'>View</button>
+      <button class='bg-red-500 text-white p-1 rounded'>Delete</button></div>`;
+    div.querySelector('button:nth-child(1)').onclick=()=>{
+      if(item.type==='password'){
+        const pwObj=JSON.parse(item.content);
+        alert(`Username: ${pwObj.username}\nPassword: ${pwObj.password}`);
+      } else alert(item.content);
+    };
+    div.querySelector('button:nth-child(2)').onclick=()=>{
+      if(confirm('Delete this item?')){vault.items=vault.items.filter(i=>i.id!==item.id);saveVault(vault,masterKey);renderItems();}
+    };
+    container.appendChild(div);
+  });
+}
+
+// Add new item
+function addItem(type){
+  const title=prompt('Title:');
+  if(!title)return;
+  let content='',date=null;
+  if(type==='password'){
+    const user=prompt('Username (optional)')||'';
+    const pwd=prompt('Password (or cancel to generate)')||Math.random().toString(36).slice(2,10);
+    content=JSON.stringify({username:user,password:pwd});
+  } else if(type==='reminder'){
+    content=prompt('Reminder content')||'';
+    date=prompt('Due date YYYY-MM-DD HH:mm (optional)')||null;
+  } else {
+    content=prompt('Note content')||'';
+  }
+  vault.items.unshift({id:uid(),type,title,content,date});
+  saveVault(vault,masterKey);
+  renderItems();
+}
+
+// Export encrypted vault
+function exportVault(){
+  const enc=JSON.parse(localStorage.getItem(DATA_KEY)||'null');
+  if(!enc)return alert('No vault to export');
+  const payload={salt:localStorage.getItem(SALT_KEY),data:enc};
+  const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='vault-backup.json';a.click();URL.revokeObjectURL(url);
+}
+
+// ---------------------- Initialize App ----------------------
+renderLogin();
+</script>
+</body>
+</html>
