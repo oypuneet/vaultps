@@ -1,11 +1,11 @@
-<!DOCTYPE html><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Secure Vault PWA</title>
 
-<!-- Tailwind CSS CDN for development -->
+<!-- Tailwind CSS CDN -->
 <script src="https://cdn.tailwindcss.com"></script>
 
 <!-- Firebase SDKs (compat) -->
@@ -23,12 +23,12 @@
 <script>
 // ---------------------- Firebase Setup ----------------------
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "your-project.firebaseapp.com",
-  projectId: "your-project",
-  storageBucket: "your-project.appspot.com",
-  messagingSenderId: "SENDER_ID",
-  appId: "APP_ID"
+  apiKey: "AIzaSyC3fh3Z4YTC8PgXAdkJRWzk111_KzhB8Rs",
+  authDomain: "vaultapp-d5685.firebaseapp.com",
+  projectId: "vaultapp-d5685",
+  storageBucket: "vaultapp-d5685.firebasestorage.app",
+  messagingSenderId: "959170111149",
+  appId: "1:959170111149:web:479c020f1da0824f1f0824"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
@@ -100,27 +100,34 @@ const app=document.getElementById('vault-interface');
 function renderLogin(){
   app.innerHTML=`
     <input type='password' id='mp' placeholder='Master Password' class='p-3 rounded w-full mb-2 border'/>
-    <button id='showHintBtn' class='bg-gray-400 text-white p-2 rounded w-full mb-2'>Show Hint</button>
-    <button id='loginBtn' class='bg-indigo-600 text-white p-2 rounded w-full'>Unlock Vault</button>
     <div id='error' class='text-red-500 mt-2'></div>`;
   
-  document.getElementById('showHintBtn').onclick = () => {
+  const pwInput = document.getElementById('mp');
+
+  // Show hint on click or hover
+  pwInput.onmouseenter = pwInput.onclick = () => {
     const hint = localStorage.getItem('vault_hint');
-    if(hint) alert(`Password hint: ${hint}`);
-    else alert('No hint set');
+    if(hint) alert(`Hint: ${hint}`);
   };
 
-  document.getElementById('loginBtn').onclick = async () => {
-    const pw=document.getElementById('mp').value;
-    const salt=loadSalt();
+  document.getElementById('mp').onkeypress = async (e) => {
+    if(e.key==='Enter'){ // Allow Enter to unlock
+      await unlockVault();
+    }
+  };
+
+  async function unlockVault(){
+    const pw = pwInput.value;
+    const salt = loadSalt();
 
     if(!salt){ // first-time setup
       if(!validateMasterPassword(pw)){
         document.getElementById('error').innerText='Password must include uppercase, lowercase, number, symbol, min 8 chars';
         return;
       }
-      masterKey = await deriveKey(pw, crypto.getRandomValues(new Uint8Array(16)));
-      saveSalt(crypto.getRandomValues(new Uint8Array(16)));
+      const newSalt = crypto.getRandomValues(new Uint8Array(16));
+      saveSalt(newSalt);
+      masterKey = await deriveKey(pw,newSalt);
       vault={items:[]};
       await saveVault(vault, masterKey);
 
@@ -137,7 +144,11 @@ function renderLogin(){
         document.getElementById('error').innerText='Incorrect password or corrupted vault';
       }
     }
-  };
+  }
+
+  // Unlock on button click
+  pwInput.insertAdjacentHTML('afterend','<button id="loginBtn" class="bg-indigo-600 text-white p-2 rounded w-full mt-2">Unlock Vault</button>');
+  document.getElementById('loginBtn').onclick=unlockVault;
 }
 
 // Render main vault interface
@@ -228,5 +239,3 @@ renderLogin();
 </script>
 </body>
 </html>
-
-
