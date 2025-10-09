@@ -53,6 +53,12 @@
     <textarea id="entryContent" placeholder="Content" class="border rounded w-full p-2 h-20"></textarea>
     <input id="entryReminder" type="datetime-local" class="border rounded w-full p-2">
     <input id="entryTags" type="text" placeholder="Tags (comma-separated)" class="border rounded w-full p-2">
+    <select id="entryRecurrence" class="border rounded w-full p-2">
+      <option value="none">No recurrence</option>
+      <option value="daily">Daily</option>
+      <option value="weekly">Weekly</option>
+      <option value="monthly">Monthly</option>
+    </select>
     <button id="addEntry" class="bg-indigo-600 text-white w-full p-2 rounded">Add Entry</button>
   </div>
 
@@ -60,6 +66,8 @@
   <ul id="entryList" class="mt-3 text-sm space-y-2"></ul>
 
   <button id="saveVault" class="bg-blue-600 text-white w-full p-2 rounded mt-3">Save Vault</button>
+  <button id="exportVault" class="bg-green-600 text-white w-full p-2 rounded mt-2">Export Encrypted Backup</button>
+  <button id="importVault" class="bg-yellow-600 text-white w-full p-2 rounded mt-2">Import Encrypted Backup</button>
 </div>
 </div>
 
@@ -67,7 +75,7 @@
 /* ---------- Utilities ---------- */
 async function deriveKey(password,salt){
   const encoder=new TextEncoder();
-  const keyMaterial = await window.crypto.subtle.importKey(
+  const keyMaterial=await window.crypto.subtle.importKey(
     "raw", encoder.encode(password), {name:"PBKDF2"}, false, ["deriveKey"]
   );
   return window.crypto.subtle.deriveKey(
@@ -110,6 +118,7 @@ const entryTitle=document.getElementById('entryTitle');
 const entryContent=document.getElementById('entryContent');
 const entryReminder=document.getElementById('entryReminder');
 const entryTags=document.getElementById('entryTags');
+const entryRecurrence=document.getElementById('entryRecurrence');
 const entryList=document.getElementById('entryList');
 
 const setError=document.getElementById('setError');
@@ -184,8 +193,8 @@ document.getElementById('unlockBtn').onclick=async()=>{
 /* ---------- Save Vault ---------- */
 document.getElementById('saveVault').onclick=async()=>{
   if(!sessionKey) return;
-  const enc=await encryptData(vaultData,sessionKey);
-  localStorage.setItem('vault_data',JSON.stringify(enc));
+  const enc=await encryptData(vaultData, sessionKey);
+  localStorage.setItem('vault_data', JSON.stringify(enc));
   alert('Vault saved securely offline.');
 };
 
@@ -198,24 +207,41 @@ document.getElementById('lockBtn').onclick=()=>{
 };
 
 /* ---------- Reminders & Entries ---------- */
-function scheduleNotification(text,time){
-  const delay=time-Date.now();
-  if(delay<=0) return;
-  setTimeout(()=>{ new Notification("Vault Reminder",{body:text}); }, delay);
+function scheduleNotification(entry){
+  if(!entry.reminder) return;
+  const now=Date.now();
+  let delay=entry.reminder-now;
+  if(delay<=0 && entry.recurrence!=='none'){
+    const date=new Date(entry.reminder);
+    switch(entry.recurrence){
+      case 'daily': date.setDate(date.getDate()+1); break;
+      case 'weekly': date.setDate(date.getDate()+7); break;
+      case 'monthly': date.setMonth(date.getMonth()+1); break;
+    }
+    entry.reminder=date.getTime();
+    delay=entry.reminder-now;
+  }
+  if(delay>0){
+    setTimeout(()=>{
+      new Notification(`Vault Reminder: ${entry.title}`,{body:entry.content});
+      if(entry.recurrence!=='none') scheduleNotification(entry);
+    }, delay);
+  }
 }
 
 function renderVault(){
   entryList.innerHTML="";
-  vaultData.forEach((e,i)=>{
+  vaultData.forEach((entry,i)=>{
     const li=document.createElement('li');
     li.className="border rounded p-2 bg-gray-50";
-    li.innerHTML=`<strong>${e.type.toUpperCase()}</strong> – ${e.title}<br>${e.content}<br>
-      ${e.reminder? "⏰ "+new Date(e.reminder).toLocaleString():""}<br>
-      ${e.tags? "🏷 "+e.tags.join(', '):""}
-      <button data-id="${i}" class="editBtn text-blue-500 ml-2">Edit</button>
-      <button data-id="${i}" class="delBtn text-red-500 ml-2">Delete</button>`;
+    li.innerHTML=`<strong>${entry.type.toUpperCase()}</strong> – ${entry.title}<br>${entry.content}<br>
+      ${entry.reminder? "⏰ "+new Date(entry.reminder).toLocaleString():""}<br>
+      ${entry.tags? "🏷 "+entry.tags.join(', '):""}<br>
+      Recurrence: ${entry.recurrence}<br>
+      <button data-id="${i}" class="editBtn text-blue-500 mr-2">Edit</button>
+      <button data-id="${i}" class="delBtn text-red-500">Delete</button>`;
     entryList.appendChild(li);
-    if(e.reminder) scheduleNotification(e.title+" – "+e.content,e.reminder);
+    if(entry.reminder) scheduleNotification(entry);
   });
 }
 
@@ -226,30 +252,61 @@ document.getElementById('addEntry').onclick=()=>{
   const content=entryContent.value.trim();
   const reminder=entryReminder.value?new Date(entryReminder.value).getTime():null;
   const tags=entryTags.value.split(',').map(t=>t.trim()).filter(t=>t);
+  const recurrence=entryRecurrence.value;
   if(!title||!content){ alert('Title and content required'); return; }
-  vaultData.unshift({type,title,content,reminder,tags});
-  entryTitle.value=""; entryContent.value=""; entryReminder.value=""; entryTags.value="";
+  vaultData.unshift({type,title,content,reminder,tags,recurrence});
+  entryTitle.value=""; entryContent.value=""; entryReminder.value=""; entryTags.value=""; entryRecurrence.value="none";
   renderVault();
 };
 
-entryList.addEventListener('click',e=>{
+entryList.addEventListener('click', e=>{
+  const id=parseInt(e.target.dataset.id);
   if(e.target.classList.contains('delBtn')){
-    const id=parseInt(e.target.dataset.id);
     vaultData.splice(id,1);
     renderVault();
   }
   if(e.target.classList.contains('editBtn')){
-    const id=parseInt(e.target.dataset.id);
     const entry=vaultData[id];
     entryType.value=entry.type;
     entryTitle.value=entry.title;
     entryContent.value=entry.content;
     entryReminder.value=entry.reminder?new Date(entry.reminder).toISOString().slice(0,16):'';
     entryTags.value=entry.tags.join(', ');
+    entryRecurrence.value=entry.recurrence;
     vaultData.splice(id,1);
     renderVault();
   }
 });
+
+/* ---------- Export / Import ---------- */
+document.getElementById('exportVault').onclick=async()=>{
+  if(!sessionKey) return;
+  const enc=await encryptData(vaultData,sessionKey);
+  const blob=new Blob([JSON.stringify(enc)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='vault_backup.json';
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+document.getElementById('importVault').onclick=()=>{
+  const fileInput=document.createElement('input');
+  fileInput.type='file';
+  fileInput.accept='application/json';
+  fileInput.onchange=async e=>{
+    const file=e.target.files[0];
+    const text=await file.text();
+    const obj=JSON.parse(text);
+    const decrypted=await decryptData(obj, sessionKey);
+    if(!decrypted){ alert('Failed to decrypt. Check password.'); return; }
+    vaultData=decrypted;
+    renderVault();
+    alert('Vault imported successfully.');
+  };
+  fileInput.click();
+};
 
 /* ---------- Notifications ---------- */
 (async()=>{
