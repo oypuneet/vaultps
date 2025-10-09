@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Secure Vault</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🔐 Secure Vault</title>
 <script src="https://cdn.tailwindcss.com"></script>
 
 <!-- Firebase SDKs -->
@@ -11,15 +11,15 @@
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-messaging-compat.js"></script>
 </head>
-<body class="bg-gray-50 text-gray-900">
 
-<div class="p-4 max-w-3xl mx-auto" id="app">
+<body class="bg-gray-50 text-gray-900">
+<div class="p-4 max-w-xl mx-auto" id="app">
   <h1 class="text-2xl font-bold mb-4">🔐 Secure Vault</h1>
   <div id="vault-interface"></div>
 </div>
 
 <script>
-// ---------------- Firebase Setup ----------------
+// ---------------- FIREBASE CONFIG ----------------
 const firebaseConfig = {
   apiKey: "YOUR_API_KEY",
   authDomain: "YOUR_PROJECT.firebaseapp.com",
@@ -32,7 +32,7 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const messaging = firebase.messaging();
 
-// ---------------- Encryption Helpers ----------------
+// ---------------- ENCRYPTION HELPERS ----------------
 function bufToBase64(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)))}
 function base64ToBuf(b64){return Uint8Array.from(atob(b64), c=>c.charCodeAt(0))}
 async function deriveKey(password, salt){
@@ -53,87 +53,77 @@ async function decryptData(key,ivB64,ctB64){
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
-// ---------------- Storage ----------------
+// ---------------- STORAGE ----------------
 const SALT_KEY='vault_salt';
 const DATA_KEY='vault_data';
+const HINT_KEY='vault_hint';
+let inactivityTimer=null;
 function saveSalt(salt){localStorage.setItem(SALT_KEY,bufToBase64(salt));}
 function loadSalt(){const s=localStorage.getItem(SALT_KEY);return s?base64ToBuf(s):null;}
 function uid(){return Math.random().toString(36).slice(2,10);}
 
-// ---------------- Vault Save/Load ----------------
-async function saveVault(obj, key){
-  const enc = await encryptData(key, obj);
-  localStorage.setItem(DATA_KEY, JSON.stringify(enc));
-  try { await db.collection('vaults').doc('myVault').set(enc); }
-  catch(e){console.error('Firebase sync failed', e);}
-}
-async function loadVault(key){
-  const localEnc = JSON.parse(localStorage.getItem(DATA_KEY)||'null');
-  if(localEnc) return await decryptData(key, localEnc.iv, localEnc.ct);
-  const doc = await db.collection('vaults').doc('myVault').get();
-  if(doc.exists){
-    const enc = doc.data();
-    return await decryptData(key, enc.iv, enc.ct);
-  }
-  return {items:[]};
-}
-
-// ---------------- Password Validation ----------------
+// ---------------- PASSWORD VALIDATION ----------------
 function validateMasterPassword(pw){
-  const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[!@#$%^&*()_+]).{8,}$/;
+  const regex=/^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[!@#$%^&*()_+]).{8,}$/;
   return regex.test(pw);
 }
 
-// ---------------- App State ----------------
+// ---------------- APP STATE ----------------
 let masterKey=null;
 let vault={items:[]};
 const app=document.getElementById('vault-interface');
 
 if(!loadSalt()) renderSetPassword(); else renderUnlock();
 
-// ---------------- Reset ----------------
+// ---------------- RESET ----------------
 function resetVault(){
-  if(confirm('Erase vault & reset password?')){
+  if(confirm('⚠️ Erase vault & reset password? This cannot be undone.')){
     localStorage.clear();
-    alert('Vault reset! Set a new password.');
+    alert('Vault reset! Please set a new password.');
     renderSetPassword();
   }
 }
 
-// ---------------- Set Password ----------------
+// ---------------- SET PASSWORD ----------------
 function renderSetPassword(){
   app.innerHTML=`
-  <p>Set your master password</p>
-  <input type="password" id="mp" placeholder="Master Password" class="p-2 border rounded w-full mt-2"/>
-  <div id="error" class="text-red-600 text-sm mt-2"></div>
-  <button id="setBtn" class="bg-indigo-600 text-white p-2 mt-2 rounded w-full">Set Password</button>`;
+    <p>Set your master password</p>
+    <input type="password" id="mp" placeholder="Master Password" class="p-2 border rounded w-full mt-2" />
+    <input type="text" id="hint" placeholder="Password Hint (optional)" class="p-2 border rounded w-full mt-2" />
+    <div id="error" class="text-red-600 text-sm mt-2"></div>
+    <button id="setBtn" class="bg-indigo-600 text-white p-2 mt-2 rounded w-full">Set Password</button>`;
   document.getElementById('setBtn').onclick=async ()=>{
-    const pw=document.getElementById('mp').value;
+    const pw=document.getElementById('mp').value.trim();
+    const hint=document.getElementById('hint').value.trim();
     if(!validateMasterPassword(pw)){
-      document.getElementById('error').innerText='Must include upper, lower, number, symbol, 8+ chars.';
+      document.getElementById('error').innerText='Password must include upper, lower, number, symbol, and 8+ characters.';
       return;
     }
     const salt=crypto.getRandomValues(new Uint8Array(16));
     saveSalt(salt);
+    if(hint) localStorage.setItem(HINT_KEY, hint);
     masterKey=await deriveKey(pw,salt);
     vault={items:[]};
     await saveVault(vault,masterKey);
-    alert('Password set. Now unlock your vault.');
+    alert('Password set successfully! Please unlock.');
     renderUnlock();
   };
 }
 
-// ---------------- Unlock ----------------
+// ---------------- UNLOCK ----------------
 function renderUnlock(){
+  const hint=localStorage.getItem(HINT_KEY)||'';
   app.innerHTML=`
-  <p>Enter Master Password</p>
-  <input type="password" id="mp" placeholder="Master Password" class="p-2 border rounded w-full mt-2"/>
-  <div id="error" class="text-red-600 text-sm mt-2"></div>
-  <button id="loginBtn" class="bg-indigo-600 text-white p-2 mt-2 rounded w-full">Unlock Vault</button>
-  <button id="resetBtn" class="bg-red-600 text-white p-2 mt-2 rounded w-full">Reset Vault</button>`;
-  
+    <p>Enter Master Password</p>
+    <div class="relative">
+      <input type="password" id="mp" placeholder="Master Password" class="p-2 border rounded w-full mt-2" />
+      ${hint?`<span title="Hint: ${hint}" class="absolute right-3 top-4 text-gray-500 cursor-pointer">💡</span>`:''}
+    </div>
+    <div id="error" class="text-red-600 text-sm mt-2"></div>
+    <button id="loginBtn" class="bg-indigo-600 text-white p-2 mt-2 rounded w-full">Unlock Vault</button>
+    <button id="resetBtn" class="bg-red-600 text-white p-2 mt-2 rounded w-full">Reset Vault</button>`;
   document.getElementById('loginBtn').onclick=async ()=>{
-    const pw=document.getElementById('mp').value;
+    const pw=document.getElementById('mp').value.trim();
     const salt=loadSalt();
     try{
       masterKey=await deriveKey(pw,salt);
@@ -141,14 +131,42 @@ function renderUnlock(){
       renderVault();
       await registerMessagingServiceWorker();
       await requestNotificationPermissionAndSaveToken();
+      resetInactivityTimer();
     }catch(e){
-      document.getElementById('error').innerText='Incorrect password.';
+      document.getElementById('error').innerText='Incorrect password or vault corrupted.';
     }
   };
   document.getElementById('resetBtn').onclick=resetVault;
 }
 
-// ---------------- Vault Interface ----------------
+// ---------------- AUTO-LOCK TIMER ----------------
+function resetInactivityTimer(){
+  clearTimeout(inactivityTimer);
+  inactivityTimer=setTimeout(()=>{
+    alert('Vault auto-locked due to inactivity.');
+    masterKey=null;
+    renderUnlock();
+  }, 5*60*1000); // 5 minutes
+  document.body.onmousemove=document.body.onkeydown=()=>resetInactivityTimer();
+}
+
+// ---------------- VAULT ----------------
+async function saveVault(obj, key){
+  const enc=await encryptData(key,obj);
+  localStorage.setItem(DATA_KEY,JSON.stringify(enc));
+  try{ await db.collection('vaults').doc('myVault').set(enc);}catch(e){console.error('Firebase sync failed',e);}
+}
+async function loadVault(key){
+  const localEnc=JSON.parse(localStorage.getItem(DATA_KEY)||'null');
+  if(localEnc) return await decryptData(key,localEnc.iv,localEnc.ct);
+  const doc=await db.collection('vaults').doc('myVault').get();
+  if(doc.exists){
+    const enc=doc.data();
+    return await decryptData(key,enc.iv,enc.ct);
+  }
+  return {items:[]};
+}
+
 function renderVault(){
   app.innerHTML=`
     <div class='flex gap-2 mb-3'>
@@ -182,7 +200,7 @@ function renderItems(){
   });
 }
 
-// ---------------- Local Reminder Notifications ----------------
+// ---------------- LOCAL REMINDERS ----------------
 function scheduleDueReminders(){
   const now=Date.now();
   vault.items.forEach(item=>{
@@ -196,14 +214,13 @@ function scheduleDueReminders(){
   });
 }
 
-// ---------------- FCM Messaging ----------------
+// ---------------- FCM MESSAGING ----------------
 async function registerMessagingServiceWorker(){
   if('serviceWorker' in navigator){
     const reg=await navigator.serviceWorker.register('/firebase-messaging-sw.js');
     messaging.useServiceWorker(reg);
   }
 }
-
 async function requestNotificationPermissionAndSaveToken(){
   try{
     const perm=await Notification.requestPermission();
@@ -220,7 +237,6 @@ async function requestNotificationPermissionAndSaveToken(){
     }
   }catch(e){console.error(e);}
 }
-
 messaging.onMessage((payload)=>{
   console.log('Message received',payload);
   new Notification(payload.notification.title,{body:payload.notification.body});
