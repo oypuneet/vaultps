@@ -3,39 +3,36 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Secure Vault PWA</title>
-
-<!-- Tailwind CSS CDN -->
+<title>Secure Vault</title>
 <script src="https://cdn.tailwindcss.com"></script>
 
-<!-- Firebase SDKs (compat) -->
+<!-- Firebase SDKs -->
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-messaging-compat.js"></script>
-
-
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+<body class="bg-gray-50 text-gray-900">
 
 <div class="p-4 max-w-3xl mx-auto" id="app">
-  <h1 class="text-2xl font-bold mb-4">Secure Vault</h1>
+  <h1 class="text-2xl font-bold mb-4">🔐 Secure Vault</h1>
   <div id="vault-interface"></div>
 </div>
 
 <script>
-// ---------------------- Firebase Setup ----------------------
+// ---------------- Firebase Setup ----------------
 const firebaseConfig = {
   apiKey: "YOUR_API_KEY",
-  authDomain: "your-project.firebaseapp.com",
-  projectId: "your-project",
-  storageBucket: "your-project.appspot.com",
-  messagingSenderId: "SENDER_ID",
-  appId: "APP_ID"
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+const messaging = firebase.messaging();
 
-// ---------------------- Crypto Helpers ----------------------
+// ---------------- Encryption Helpers ----------------
 function bufToBase64(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)))}
 function base64ToBuf(b64){return Uint8Array.from(atob(b64), c=>c.charCodeAt(0))}
 async function deriveKey(password, salt){
@@ -56,220 +53,178 @@ async function decryptData(key,ivB64,ctB64){
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
-// ---------------------- Storage Helpers ----------------------
+// ---------------- Storage ----------------
 const SALT_KEY='vault_salt';
 const DATA_KEY='vault_data';
 function saveSalt(salt){localStorage.setItem(SALT_KEY,bufToBase64(salt));}
 function loadSalt(){const s=localStorage.getItem(SALT_KEY);return s?base64ToBuf(s):null;}
 function uid(){return Math.random().toString(36).slice(2,10);}
 
-// Save vault: localStorage + Firebase encrypted
-async function saveVault(obj, key) {
+// ---------------- Vault Save/Load ----------------
+async function saveVault(obj, key){
   const enc = await encryptData(key, obj);
   localStorage.setItem(DATA_KEY, JSON.stringify(enc));
-  try { await db.collection('vaults').doc('myVault').set(enc); console.log('Vault synced to Firebase'); }
-  catch(e){console.error('Firebase sync error:',e);}
+  try { await db.collection('vaults').doc('myVault').set(enc); }
+  catch(e){console.error('Firebase sync failed', e);}
 }
-
-// Load vault: localStorage first, fallback Firebase
 async function loadVault(key){
   const localEnc = JSON.parse(localStorage.getItem(DATA_KEY)||'null');
   if(localEnc) return await decryptData(key, localEnc.iv, localEnc.ct);
   const doc = await db.collection('vaults').doc('myVault').get();
   if(doc.exists){
     const enc = doc.data();
-    localStorage.setItem(DATA_KEY, JSON.stringify(enc));
     return await decryptData(key, enc.iv, enc.ct);
-  } 
+  }
   return {items:[]};
 }
 
-// ---------------------- Password Validation ----------------------
+// ---------------- Password Validation ----------------
 function validateMasterPassword(pw){
-  const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+]).{8,}$/;
+  const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[!@#$%^&*()_+]).{8,}$/;
   return regex.test(pw);
 }
-function validateItemPassword(pw){
-  return validateMasterPassword(pw);
-}
 
-// ---------------------- App Logic ----------------------
+// ---------------- App State ----------------
 let masterKey=null;
 let vault={items:[]};
 const app=document.getElementById('vault-interface');
 
-// ---------------------- Reset Vault Function ----------------------
+if(!loadSalt()) renderSetPassword(); else renderUnlock();
+
+// ---------------- Reset ----------------
 function resetVault(){
-  if(confirm('This will erase all vault data and master password. Are you sure?')){
-    localStorage.removeItem('vault_data');
-    localStorage.removeItem('vault_salt');
-    localStorage.removeItem('vault_hint');
-    alert('Vault reset! Please set a new master password.');
+  if(confirm('Erase vault & reset password?')){
+    localStorage.clear();
+    alert('Vault reset! Set a new password.');
     renderSetPassword();
   }
 }
 
-// ---------------------- Initialize App ----------------------
-if(!loadSalt()){
-  renderSetPassword();
-}else{
-  renderUnlock();
-}
-
-// ---------------------- Set Master Password (First-time) ----------------------
+// ---------------- Set Password ----------------
 function renderSetPassword(){
   app.innerHTML=`
-    <p class="mb-2">Set your master password</p>
-    <input type='password' id='mp' placeholder='Set Master Password' class='p-3 rounded w-full mb-2 border'/>
-    <div id='error' class='text-red-500 mt-2'></div>
-    <button id="setBtn" class="bg-indigo-600 text-white p-2 rounded w-full mt-2">Set Password</button>
-    <button id="resetVaultBtn" class="bg-red-600 text-white p-2 rounded w-full mt-2">Reset Vault</button>
-  `;
-  
-  const pwInput=document.getElementById('mp');
-
+  <p>Set your master password</p>
+  <input type="password" id="mp" placeholder="Master Password" class="p-2 border rounded w-full mt-2"/>
+  <div id="error" class="text-red-600 text-sm mt-2"></div>
+  <button id="setBtn" class="bg-indigo-600 text-white p-2 mt-2 rounded w-full">Set Password</button>`;
   document.getElementById('setBtn').onclick=async ()=>{
-    const pw = pwInput.value;
+    const pw=document.getElementById('mp').value;
     if(!validateMasterPassword(pw)){
-      document.getElementById('error').innerText='Password must include uppercase, lowercase, number, symbol, min 8 chars';
+      document.getElementById('error').innerText='Must include upper, lower, number, symbol, 8+ chars.';
       return;
     }
-    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const salt=crypto.getRandomValues(new Uint8Array(16));
     saveSalt(salt);
-    masterKey = await deriveKey(pw,salt);
+    masterKey=await deriveKey(pw,salt);
     vault={items:[]};
-    await saveVault(vault, masterKey);
-    const hint = prompt('Optional: Enter a password hint (visible only to you)')||'';
-    localStorage.setItem('vault_hint', hint);
-    alert('Master password set! Now you can unlock your vault.');
+    await saveVault(vault,masterKey);
+    alert('Password set. Now unlock your vault.');
     renderUnlock();
   };
-
-  document.getElementById('resetVaultBtn').onclick = resetVault;
 }
 
-// ---------------------- Unlock Vault ----------------------
+// ---------------- Unlock ----------------
 function renderUnlock(){
   app.innerHTML=`
-    <p class="mb-2">Enter master password to unlock vault</p>
-    <input type='password' id='mp' placeholder='Master Password' class='p-3 rounded w-full mb-2 border'/>
-    <div id='error' class='text-red-500 mt-2'></div>
-    <button id="loginBtn" class="bg-indigo-600 text-white p-2 rounded w-full mt-2">Unlock Vault</button>
-    <button id="resetVaultBtn" class="bg-red-600 text-white p-2 rounded w-full mt-2">Reset Vault</button>
-  `;
+  <p>Enter Master Password</p>
+  <input type="password" id="mp" placeholder="Master Password" class="p-2 border rounded w-full mt-2"/>
+  <div id="error" class="text-red-600 text-sm mt-2"></div>
+  <button id="loginBtn" class="bg-indigo-600 text-white p-2 mt-2 rounded w-full">Unlock Vault</button>
+  <button id="resetBtn" class="bg-red-600 text-white p-2 mt-2 rounded w-full">Reset Vault</button>`;
   
-  const pwInput=document.getElementById('mp');
-
-  // Show hint on hover/click
-  pwInput.onmouseenter = pwInput.onclick = () => {
-    const hint = localStorage.getItem('vault_hint');
-    if(hint) alert(`Hint: ${hint}`);
-  };
-
-  async function unlockVault(){
-    const pw = pwInput.value;
-    const salt = loadSalt();
-    try {
-      masterKey = await deriveKey(pw,salt);
-      vault = await loadVault(masterKey);
+  document.getElementById('loginBtn').onclick=async ()=>{
+    const pw=document.getElementById('mp').value;
+    const salt=loadSalt();
+    try{
+      masterKey=await deriveKey(pw,salt);
+      vault=await loadVault(masterKey);
       renderVault();
-    } catch(e){
-      document.getElementById('error').innerText='Incorrect password or corrupted vault';
+      await registerMessagingServiceWorker();
+      await requestNotificationPermissionAndSaveToken();
+    }catch(e){
+      document.getElementById('error').innerText='Incorrect password.';
     }
-  }
-
-  document.getElementById('loginBtn').onclick = unlockVault;
-  pwInput.onkeypress = async (e) => { if(e.key==='Enter') await unlockVault(); };
-  document.getElementById('resetVaultBtn').onclick = resetVault;
+  };
+  document.getElementById('resetBtn').onclick=resetVault;
 }
 
-// ---------------------- Main Vault Interface ----------------------
+// ---------------- Vault Interface ----------------
 function renderVault(){
   app.innerHTML=`
-    <div class='flex flex-col gap-2 mb-2'>
-      <button id='addNote' class='bg-green-600 text-white p-2 rounded'>+ Note</button>
-      <button id='addPassword' class='bg-blue-600 text-white p-2 rounded'>+ Password</button>
+    <div class='flex gap-2 mb-3'>
       <button id='addReminder' class='bg-yellow-600 text-white p-2 rounded'>+ Reminder</button>
-      <button id='exportVault' class='bg-gray-600 text-white p-2 rounded'>Export Vault</button>
-      <button id='lockVault' class='bg-red-600 text-white p-2 rounded'>Lock Vault</button>
+      <button id='lock' class='bg-red-600 text-white p-2 rounded'>Lock</button>
     </div>
     <div id='items'></div>`;
-
-  document.getElementById('addNote').onclick=()=>addItem('note');
-  document.getElementById('addPassword').onclick=()=>addItem('password');
   document.getElementById('addReminder').onclick=()=>addItem('reminder');
-  document.getElementById('exportVault').onclick=exportVault;
-  document.getElementById('lockVault').onclick=()=>{masterKey=null;vault={items:[]};renderUnlock();};
+  document.getElementById('lock').onclick=()=>{masterKey=null;renderUnlock();};
   renderItems();
+  scheduleDueReminders();
 }
 
-// ---------------------- Vault Items ----------------------
-function renderItems(){
-  const container=document.getElementById('items');
-  container.innerHTML='';
-  vault.items.forEach(item=>{
-    const div=document.createElement('div');
-    div.className='p-2 bg-white dark:bg-gray-800 rounded mb-2 flex justify-between items-center';
-    let content=item.type==='password'?'••••••••':item.content;
-    div.innerHTML=`<div><b>${item.title}</b> (${item.type}) ${item.date?'- '+item.date:''}<br>${content}</div>
-      <div class='flex gap-2'><button class='bg-blue-600 text-white p-1 rounded'>View</button>
-      <button class='bg-red-500 text-white p-1 rounded'>Delete</button></div>`;
-    div.querySelector('button:nth-child(1)').onclick=()=>{
-      if(item.type==='password'){
-        const pwObj=JSON.parse(item.content);
-        alert(`Username: ${pwObj.username}\nPassword: ${pwObj.password}`);
-      } else alert(item.content);
-    };
-    div.querySelector('button:nth-child(2)').onclick=()=>{
-      if(confirm('Delete this item?')){
-        vault.items=vault.items.filter(i=>i.id!==item.id);
-        saveVault(vault,masterKey);
-        renderItems();
-      }
-    };
-    container.appendChild(div);
-  });
-}
-
-// ---------------------- Add Vault Item ----------------------
 function addItem(type){
   const title=prompt('Title:');
-  if(!title)return;
-  let content='',date=null;
-  if(type==='password'){
-    const user=prompt('Username (optional)')||'';
-    let pwd=prompt('Password (or cancel to generate)')||generateStrongPassword();
-    if(!validateItemPassword(pwd)){alert('Password must include uppercase, lowercase, number, symbol, min 8 chars'); return;}
-    content=JSON.stringify({username:user,password:pwd});
-  } else if(type==='reminder'){
-    content=prompt('Reminder content')||'';
-    date=prompt('Due date YYYY-MM-DD HH:mm (optional)')||null;
-  } else {
-    content=prompt('Note content')||'';
-  }
+  const content=prompt('Reminder content:');
+  const date=prompt('Enter date-time (YYYY-MM-DD HH:mm):');
   vault.items.unshift({id:uid(),type,title,content,date});
   saveVault(vault,masterKey);
   renderItems();
 }
 
-// ---------------------- Generate Password ----------------------
-function generateStrongPassword(len=12){
-  const chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+';
-  let pw='';
-  for(let i=0;i<len;i++) pw+=chars[Math.floor(Math.random()*chars.length)];
-  return pw;
+function renderItems(){
+  const container=document.getElementById('items');
+  container.innerHTML='';
+  vault.items.forEach(item=>{
+    const div=document.createElement('div');
+    div.className='p-3 bg-white shadow rounded mb-2';
+    div.innerHTML=`<b>${item.title}</b><br>${item.content}<br><i>${item.date}</i>`;
+    container.appendChild(div);
+  });
 }
 
-// ---------------------- Export Vault ----------------------
-function exportVault(){
-  const enc=JSON.parse(localStorage.getItem(DATA_KEY)||'null');
-  if(!enc)return alert('No vault to export');
-  const payload={salt:localStorage.getItem(SALT_KEY),data:enc};
-  const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');a.href=url;a.download='vault-backup.json';a.click();URL.revokeObjectURL(url);
+// ---------------- Local Reminder Notifications ----------------
+function scheduleDueReminders(){
+  const now=Date.now();
+  vault.items.forEach(item=>{
+    if(item.type==='reminder' && item.date){
+      const t=new Date(item.date).getTime();
+      const delay=t-now;
+      if(delay>0 && delay<2147483647){
+        setTimeout(()=>new Notification(`Reminder: ${item.title}`,{body:item.content||''}),delay);
+      }
+    }
+  });
 }
+
+// ---------------- FCM Messaging ----------------
+async function registerMessagingServiceWorker(){
+  if('serviceWorker' in navigator){
+    const reg=await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+    messaging.useServiceWorker(reg);
+  }
+}
+
+async function requestNotificationPermissionAndSaveToken(){
+  try{
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted') return;
+    const vapidKey='YOUR_VAPID_PUBLIC_KEY';
+    const token=await messaging.getToken({vapidKey});
+    if(token){
+      await db.collection('fcm_tokens').doc(token).set({
+        token,
+        createdAt:firebase.firestore.FieldValue.serverTimestamp(),
+        platform:navigator.userAgent
+      });
+      console.log('Token saved',token);
+    }
+  }catch(e){console.error(e);}
+}
+
+messaging.onMessage((payload)=>{
+  console.log('Message received',payload);
+  new Notification(payload.notification.title,{body:payload.notification.body});
+});
 </script>
 </body>
 </html>
-
