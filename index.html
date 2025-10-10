@@ -1,319 +1,244 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Secure Vault – Future Proof</title>
-<link rel="manifest" href="manifest.json">
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/crypto-js@4.1.1/crypto-js.min.js"></script>
-</head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
-<div id="app" class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🔐 Secure Vault</title>
+  <script src="https://cdn.tailwindcss.com"></script>
 
-<h1 class="text-2xl font-bold text-center mb-4">🔐 Secure Vault</h1>
+  <!-- ✅ iOS PWA support -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Secure Vault" />
+  <link rel="apple-touch-icon" href="icon-512.png" />
+  <link rel="manifest" href="manifest.json" />
 
-<!-- SET PASSWORD -->
-<div id="set-password" class="space-y-3">
-  <input id="newPassword" type="password" placeholder="Set Master Password"
-         class="border rounded w-full p-2">
-  <input id="passwordHint" type="text" placeholder="Password Hint (optional)"
-         class="border rounded w-full p-2">
-  <div id="setError" class="text-red-600 text-sm"></div>
-  <button id="savePassword" class="bg-blue-600 text-white w-full p-2 rounded">Set Password</button>
-</div>
-
-<!-- UNLOCK -->
-<div id="unlock" class="space-y-3 hidden">
-  <div class="relative">
-    <input id="masterPassword" type="password" placeholder="Enter Master Password"
-           class="border rounded w-full p-2">
-    <span id="hintIcon" title="" class="absolute right-3 top-3 text-gray-500 cursor-pointer hidden">💡</span>
-  </div>
-  <div id="unlockError" class="text-red-600 text-sm"></div>
-  <button id="unlockBtn" class="bg-green-600 text-white w-full p-2 rounded">Unlock</button>
-</div>
-
-<!-- VAULT -->
-<div id="vault" class="hidden">
-  <div class="flex justify-between items-center mb-3">
-    <h2 class="text-xl font-semibold">My Vault</h2>
-    <button id="lockBtn" class="text-red-500">Lock</button>
-  </div>
-
-  <!-- Entry Form -->
-  <div class="mb-3 space-y-2">
-    <select id="entryType" class="border rounded w-full p-2">
-      <option value="note">Note</option>
-      <option value="password">Password</option>
-      <option value="task">To Remember</option>
-      <option value="payment">Payment Reminder</option>
-    </select>
-    <input id="entryTitle" type="text" placeholder="Title" class="border rounded w-full p-2">
-    <textarea id="entryContent" placeholder="Content" class="border rounded w-full p-2 h-20"></textarea>
-    <input id="entryReminder" type="datetime-local" class="border rounded w-full p-2">
-    <input id="entryTags" type="text" placeholder="Tags (comma-separated)" class="border rounded w-full p-2">
-    <select id="entryRecurrence" class="border rounded w-full p-2">
-      <option value="none">No recurrence</option>
-      <option value="daily">Daily</option>
-      <option value="weekly">Weekly</option>
-      <option value="monthly">Monthly</option>
-    </select>
-    <button id="addEntry" class="bg-indigo-600 text-white w-full p-2 rounded">Add Entry</button>
-  </div>
-
-  <!-- Entries List -->
-  <ul id="entryList" class="mt-3 text-sm space-y-2"></ul>
-
-  <button id="saveVault" class="bg-blue-600 text-white w-full p-2 rounded mt-3">Save Vault</button>
-  <button id="exportVault" class="bg-green-600 text-white w-full p-2 rounded mt-2">Export Encrypted Backup</button>
-  <button id="importVault" class="bg-yellow-600 text-white w-full p-2 rounded mt-2">Import Encrypted Backup</button>
-</div>
-</div>
-
-<script>
-/* ---------- Utilities ---------- */
-async function deriveKey(password,salt){
-  const encoder=new TextEncoder();
-  const keyMaterial=await window.crypto.subtle.importKey(
-    "raw", encoder.encode(password), {name:"PBKDF2"}, false, ["deriveKey"]
-  );
-  return window.crypto.subtle.deriveKey(
-    {name:"PBKDF2", salt:encoder.encode(salt), iterations:100000, hash:"SHA-256"},
-    keyMaterial,
-    {name:"AES-GCM", length:256},
-    true,
-    ["encrypt","decrypt"]
-  );
-}
-
-async function encryptData(data,key){
-  const iv=window.crypto.getRandomValues(new Uint8Array(12));
-  const encoded=new TextEncoder().encode(JSON.stringify(data));
-  const cipher=await window.crypto.subtle.encrypt({name:"AES-GCM", iv}, key, encoded);
-  return {cipher:Array.from(new Uint8Array(cipher)),iv:Array.from(iv)};
-}
-
-async function decryptData(obj,key){
-  try{
-    const iv=new Uint8Array(obj.iv);
-    const cipher=new Uint8Array(obj.cipher);
-    const decoded=await window.crypto.subtle.decrypt({name:"AES-GCM", iv}, key, cipher);
-    return JSON.parse(new TextDecoder().decode(decoded));
-  }catch(e){ return null; }
-}
-
-/* ---------- DOM ---------- */
-const setDiv=document.getElementById('set-password');
-const unlockDiv=document.getElementById('unlock');
-const vaultDiv=document.getElementById('vault');
-
-const newPwdInput=document.getElementById('newPassword');
-const hintInput=document.getElementById('passwordHint');
-const masterPwdInput=document.getElementById('masterPassword');
-const hintIcon=document.getElementById('hintIcon');
-
-const entryType=document.getElementById('entryType');
-const entryTitle=document.getElementById('entryTitle');
-const entryContent=document.getElementById('entryContent');
-const entryReminder=document.getElementById('entryReminder');
-const entryTags=document.getElementById('entryTags');
-const entryRecurrence=document.getElementById('entryRecurrence');
-const entryList=document.getElementById('entryList');
-
-const setError=document.getElementById('setError');
-const unlockError=document.getElementById('unlockError');
-
-/* ---------- Vault state ---------- */
-let vaultData=[];
-let sessionKey=null;
-const SALT="securevault_salt_2025";
-
-/* ---------- Load state ---------- */
-if(localStorage.getItem('vault_key')){
-  setDiv.classList.add('hidden');
-  unlockDiv.classList.remove('hidden');
-  const hint=localStorage.getItem('vault_hint');
-  if(hint){ hintIcon.title=hint; hintIcon.classList.remove('hidden'); }
-}
-
-/* ---------- Auto-lock ---------- */
-let inactivityTimer=null;
-function resetTimer(){
-  clearTimeout(inactivityTimer);
-  inactivityTimer=setTimeout(()=>{ 
-    alert('Vault auto-locked due to inactivity.');
-    vaultDiv.classList.add('hidden');
-    unlockDiv.classList.remove('hidden');
-    vaultData=[];
-    sessionKey=null;
-  }, 5*60*1000);
-}
-document.body.onmousemove=document.body.onkeydown=resetTimer;
-
-/* ---------- Password Setup ---------- */
-document.getElementById('savePassword').onclick = async () => {
-  const pwd=newPwdInput.value.trim();
-  if(!/^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[!@#$%^&*()_+]).{8,}$/.test(pwd)){
-    setError.textContent='Password must be 8+ chars, include upper/lower/number/symbol.';
-    return;
-  }
-  const key=await deriveKey(pwd,SALT);
-  const exported=await window.crypto.subtle.exportKey("raw",key);
-  localStorage.setItem('vault_key',Array.from(new Uint8Array(exported)));
-  localStorage.setItem('vault_hint',hintInput.value.trim());
-  alert('Password set! Now unlock to start.');
-  setDiv.classList.add('hidden');
-  unlockDiv.classList.remove('hidden');
-  if(hintInput.value.trim()){ hintIcon.title=hintInput.value.trim(); hintIcon.classList.remove('hidden'); }
-};
-
-/* ---------- Unlock ---------- */
-document.getElementById('unlockBtn').onclick=async()=>{
-  const pwd=masterPwdInput.value.trim();
-  const key=await deriveKey(pwd,SALT);
-  const exported=await window.crypto.subtle.exportKey("raw",key);
-  const storedKey=localStorage.getItem('vault_key')?.split(',').map(n=>parseInt(n));
-  if(!storedKey || storedKey.join(',')!==Array.from(new Uint8Array(exported)).join(',')){
-    unlockError.textContent='Incorrect password';
-    return;
-  }
-  sessionKey=key;
-  const enc=JSON.parse(localStorage.getItem('vault_data')||'null');
-  if(enc){ 
-    const decrypted=await decryptData(enc,key);
-    if(decrypted) vaultData=decrypted;
-  }
-  unlockDiv.classList.add('hidden');
-  vaultDiv.classList.remove('hidden');
-  resetTimer();
-  renderVault();
-};
-
-/* ---------- Save Vault ---------- */
-document.getElementById('saveVault').onclick=async()=>{
-  if(!sessionKey) return;
-  const enc=await encryptData(vaultData, sessionKey);
-  localStorage.setItem('vault_data', JSON.stringify(enc));
-  alert('Vault saved securely offline.');
-};
-
-/* ---------- Lock ---------- */
-document.getElementById('lockBtn').onclick=()=>{
-  vaultDiv.classList.add('hidden');
-  unlockDiv.classList.remove('hidden');
-  vaultData=[];
-  sessionKey=null;
-};
-
-/* ---------- Reminders & Entries ---------- */
-function scheduleNotification(entry){
-  if(!entry.reminder) return;
-  const now=Date.now();
-  let delay=entry.reminder-now;
-  if(delay<=0 && entry.recurrence!=='none'){
-    const date=new Date(entry.reminder);
-    switch(entry.recurrence){
-      case 'daily': date.setDate(date.getDate()+1); break;
-      case 'weekly': date.setDate(date.getDate()+7); break;
-      case 'monthly': date.setMonth(date.getMonth()+1); break;
+  <style>
+    body {
+      background-color: #f9fafb;
+      font-family: system-ui, sans-serif;
     }
-    entry.reminder=date.getTime();
-    delay=entry.reminder-now;
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+  <!-- 📱 iOS install prompt -->
+  <div id="iosPrompt" class="fixed bottom-2 left-2 right-2 bg-blue-600 text-white text-center p-2 rounded-xl hidden">
+    <p>📱 Tap <strong>Share</strong> → <strong>Add to Home Screen</strong> to install Secure Vault.</p>
+  </div>
+
+  <!-- 🧱 Main App Container -->
+  <div id="app" class="w-full max-w-md bg-white shadow-xl rounded-2xl p-4">
+    <h1 class="text-2xl font-bold text-center mb-3">🔐 Secure Vault</h1>
+
+    <!-- Setup password -->
+    <div id="passwordSetup" class="space-y-2">
+      <input id="password" type="password" placeholder="Set Password" class="w-full border p-2 rounded" />
+      <input id="hint" type="text" placeholder="Password Hint (optional)" class="w-full border p-2 rounded" />
+      <button id="setPassword" class="bg-blue-600 text-white w-full p-2 rounded">Set Password</button>
+    </div>
+
+    <!-- Unlock Vault -->
+    <div id="unlockVault" class="space-y-2 hidden">
+      <input id="unlockPassword" type="password" placeholder="Enter Password" class="w-full border p-2 rounded" />
+      <button id="unlockButton" class="bg-green-600 text-white w-full p-2 rounded">Unlock Vault</button>
+      <p id="passwordHint" class="text-sm text-gray-500 mt-2"></p>
+    </div>
+
+    <!-- Vault Section -->
+    <div id="vaultSection" class="hidden space-y-2 mt-4">
+      <select id="entryType" class="border rounded w-full p-2">
+        <option value="note">📝 Note</option>
+        <option value="password">🔑 Password</option>
+        <option value="reminder">💰 Payment Reminder</option>
+      </select>
+
+      <input id="entryTitle" placeholder="Title" class="border rounded w-full p-2" />
+      <textarea id="entryContent" placeholder="Content" class="border rounded w-full p-2"></textarea>
+      <input id="entryReminder" type="datetime-local" class="border rounded w-full p-2" />
+      <input id="entryTags" placeholder="Tags (comma-separated)" class="border rounded w-full p-2" />
+      <select id="entryRecurrence" class="border rounded w-full p-2">
+        <option value="none">No recurrence</option>
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+      </select>
+
+      <button id="addEntry" class="bg-blue-500 text-white w-full p-2 rounded">Add Entry</button>
+      <button id="exportVault" class="bg-green-600 text-white w-full p-2 rounded">Export Encrypted Backup</button>
+      <button id="importVault" class="bg-yellow-600 text-white w-full p-2 rounded">Import Encrypted Backup</button>
+      <button id="lockVault" class="bg-gray-600 text-white w-full p-2 rounded">Lock Vault</button>
+
+      <ul id="entryList" class="mt-4 space-y-2"></ul>
+    </div>
+  </div>
+
+  <script>
+  /* ---------- Encryption ---------- */
+  async function getKey(password, salt) {
+    const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
+      keyMaterial,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
   }
-  if(delay>0){
-    setTimeout(()=>{
-      new Notification(`Vault Reminder: ${entry.title}`,{body:entry.content});
-      if(entry.recurrence!=='none') scheduleNotification(entry);
+
+  async function encryptData(data, password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await getKey(password, salt);
+    const encoded = new TextEncoder().encode(JSON.stringify(data));
+    const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
+    return { salt: Array.from(salt), iv: Array.from(iv), cipher: Array.from(new Uint8Array(cipher)) };
+  }
+
+  async function decryptData(obj, password) {
+    try {
+      const salt = new Uint8Array(obj.salt);
+      const iv = new Uint8Array(obj.iv);
+      const key = await getKey(password, salt);
+      const data = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, new Uint8Array(obj.cipher));
+      return JSON.parse(new TextDecoder().decode(data));
+    } catch {
+      return null;
+    }
+  }
+
+  /* ---------- App Logic ---------- */
+  let vaultData = [];
+  let masterPassword = null;
+
+  const setup = document.getElementById("passwordSetup");
+  const unlock = document.getElementById("unlockVault");
+  const vault = document.getElementById("vaultSection");
+  const hint = document.getElementById("hint");
+  const hintText = document.getElementById("passwordHint");
+
+  if (localStorage.getItem("vault")) {
+    setup.classList.add("hidden");
+    unlock.classList.remove("hidden");
+    const savedHint = localStorage.getItem("vaultHint");
+    if (savedHint) hintText.textContent = "💡 Hint: " + savedHint;
+  }
+
+  document.getElementById("setPassword").onclick = async () => {
+    const password = document.getElementById("password").value;
+    const hintValue = hint.value;
+    if (!password.match(/^(?=.*[a-zA-Z])(?=.*[0-9])(?=.*[!@#$%^&*]).{8,}$/)) {
+      alert("Password must have letters, numbers, symbols, and be 8+ chars long.");
+      return;
+    }
+    masterPassword = password;
+    localStorage.setItem("vaultHint", hintValue);
+    localStorage.setItem("vault", JSON.stringify(await encryptData([], password)));
+    setup.classList.add("hidden");
+    unlock.classList.remove("hidden");
+    alert("Password set successfully!");
+  };
+
+  document.getElementById("unlockButton").onclick = async () => {
+    const password = document.getElementById("unlockPassword").value;
+    const enc = JSON.parse(localStorage.getItem("vault"));
+    const data = await decryptData(enc, password);
+    if (!data) return alert("Incorrect password or vault corrupted.");
+    masterPassword = password;
+    vaultData = data;
+    unlock.classList.add("hidden");
+    vault.classList.remove("hidden");
+    renderVault();
+  };
+
+  document.getElementById("lockVault").onclick = async () => {
+    const enc = await encryptData(vaultData, masterPassword);
+    localStorage.setItem("vault", JSON.stringify(enc));
+    masterPassword = null;
+    vault.classList.add("hidden");
+    unlock.classList.remove("hidden");
+  };
+
+  /* ---------- Entry Management ---------- */
+  document.getElementById("addEntry").onclick = () => {
+    const type = entryType.value;
+    const title = entryTitle.value.trim();
+    const content = entryContent.value.trim();
+    const reminder = entryReminder.value ? new Date(entryReminder.value).getTime() : null;
+    const tags = entryTags.value.split(",").map(t => t.trim()).filter(t => t);
+    const recurrence = entryRecurrence.value;
+    if (!title || !content) return alert("Please fill title and content.");
+    vaultData.unshift({ type, title, content, reminder, tags, recurrence });
+    renderVault();
+    entryTitle.value = entryContent.value = entryReminder.value = entryTags.value = "";
+  };
+
+  function renderVault() {
+    const list = document.getElementById("entryList");
+    list.innerHTML = "";
+    vaultData.forEach((entry, i) => {
+      const li = document.createElement("li");
+      li.className = "p-3 border rounded-lg bg-gray-50";
+      li.innerHTML = `<strong>${entry.type.toUpperCase()}</strong> – ${entry.title}<br>${entry.content}<br>
+        ${entry.reminder ? "⏰ " + new Date(entry.reminder).toLocaleString() : ""}
+        ${entry.recurrence !== "none" ? `<br>🔁 ${entry.recurrence}` : ""}
+        <br><button onclick="deleteEntry(${i})" class="text-red-500">Delete</button>`;
+      list.appendChild(li);
+      scheduleNotification(entry);
+    });
+  }
+
+  function deleteEntry(i) {
+    vaultData.splice(i, 1);
+    renderVault();
+  }
+
+  /* ---------- Notifications ---------- */
+  async function scheduleNotification(entry) {
+    if (!entry.reminder) return;
+    const now = Date.now();
+    let delay = entry.reminder - now;
+    if (delay < 0) return;
+    if (Notification.permission !== "granted") await Notification.requestPermission();
+    setTimeout(() => {
+      new Notification("🔔 Vault Reminder", { body: `${entry.title}: ${entry.content}` });
     }, delay);
   }
-}
 
-function renderVault(){
-  entryList.innerHTML="";
-  vaultData.forEach((entry,i)=>{
-    const li=document.createElement('li');
-    li.className="border rounded p-2 bg-gray-50";
-    li.innerHTML=`<strong>${entry.type.toUpperCase()}</strong> – ${entry.title}<br>${entry.content}<br>
-      ${entry.reminder? "⏰ "+new Date(entry.reminder).toLocaleString():""}<br>
-      ${entry.tags? "🏷 "+entry.tags.join(', '):""}<br>
-      Recurrence: ${entry.recurrence}<br>
-      <button data-id="${i}" class="editBtn text-blue-500 mr-2">Edit</button>
-      <button data-id="${i}" class="delBtn text-red-500">Delete</button>`;
-    entryList.appendChild(li);
-    if(entry.reminder) scheduleNotification(entry);
-  });
-}
-
-/* Add / Edit / Delete */
-document.getElementById('addEntry').onclick=()=>{
-  const type=entryType.value;
-  const title=entryTitle.value.trim();
-  const content=entryContent.value.trim();
-  const reminder=entryReminder.value?new Date(entryReminder.value).getTime():null;
-  const tags=entryTags.value.split(',').map(t=>t.trim()).filter(t=>t);
-  const recurrence=entryRecurrence.value;
-  if(!title||!content){ alert('Title and content required'); return; }
-  vaultData.unshift({type,title,content,reminder,tags,recurrence});
-  entryTitle.value=""; entryContent.value=""; entryReminder.value=""; entryTags.value=""; entryRecurrence.value="none";
-  renderVault();
-};
-
-entryList.addEventListener('click', e=>{
-  const id=parseInt(e.target.dataset.id);
-  if(e.target.classList.contains('delBtn')){
-    vaultData.splice(id,1);
-    renderVault();
-  }
-  if(e.target.classList.contains('editBtn')){
-    const entry=vaultData[id];
-    entryType.value=entry.type;
-    entryTitle.value=entry.title;
-    entryContent.value=entry.content;
-    entryReminder.value=entry.reminder?new Date(entry.reminder).toISOString().slice(0,16):'';
-    entryTags.value=entry.tags.join(', ');
-    entryRecurrence.value=entry.recurrence;
-    vaultData.splice(id,1);
-    renderVault();
-  }
-});
-
-/* ---------- Export / Import ---------- */
-document.getElementById('exportVault').onclick=async()=>{
-  if(!sessionKey) return;
-  const enc=await encryptData(vaultData,sessionKey);
-  const blob=new Blob([JSON.stringify(enc)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;
-  a.download='vault_backup.json';
-  a.click();
-  URL.revokeObjectURL(url);
-};
-
-document.getElementById('importVault').onclick=()=>{
-  const fileInput=document.createElement('input');
-  fileInput.type='file';
-  fileInput.accept='application/json';
-  fileInput.onchange=async e=>{
-    const file=e.target.files[0];
-    const text=await file.text();
-    const obj=JSON.parse(text);
-    const decrypted=await decryptData(obj, sessionKey);
-    if(!decrypted){ alert('Failed to decrypt. Check password.'); return; }
-    vaultData=decrypted;
-    renderVault();
-    alert('Vault imported successfully.');
+  /* ---------- Export / Import ---------- */
+  document.getElementById("exportVault").onclick = async () => {
+    if (!masterPassword) return;
+    const enc = await encryptData(vaultData, masterPassword);
+    const blob = new Blob([JSON.stringify(enc)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "vault_backup.json";
+    a.click();
+    URL.revokeObjectURL(url);
   };
-  fileInput.click();
-};
 
-/* ---------- Notifications ---------- */
-(async()=>{
-  if(Notification && Notification.permission!=='granted'){
-    await Notification.requestPermission();
+  document.getElementById("importVault").onclick = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json";
+    input.onchange = async e => {
+      const file = e.target.files[0];
+      const text = await file.text();
+      const obj = JSON.parse(text);
+      const decrypted = await decryptData(obj, masterPassword);
+      if (!decrypted) return alert("Failed to decrypt. Wrong password?");
+      vaultData = decrypted;
+      renderVault();
+      alert("Vault imported successfully.");
+    };
+    input.click();
+  };
+
+  /* ---------- iOS PWA Prompt ---------- */
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone) {
+    document.getElementById("iosPrompt").classList.remove("hidden");
   }
-})();
-</script>
+  </script>
 </body>
 </html>
